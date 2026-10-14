@@ -67,37 +67,44 @@ CHARA_EVENT_ID = 6000            # trainee outing / date events (story 50<chara>
 CAREER_EVENT_IDS = frozenset({SUPPORT_EVENT_ID, SUPPORT_RANDOM_EVENT_ID, CHARA_EVENT_ID})
 
 
-# THE SHORT STORY ID -- what actually goes on the wire.
-#
-# single_mode_story_data carries a story TWICE on the same row: `story_id` (a
-# static reference id) and, when non-zero, `short_story_id` -- the copy that
-# sits in the trainee's own CHRONOLOGICAL chain. text_data has a title under
-# both, so a beat looks duplicated: Kitasan Black's "Summer Camp (Year 2)
-# Begins!" is 501068103 AND 501068409, Special Week's is 501001103 and
-# 501001406. Only the suffix of the short one is per-trainee.
-#
-# The real server serves the SHORT id, with no exceptions: across the three
-# 20260905 sessions it served 249 distinct stories and NOT ONE of them was a
-# long id that has a short. _find_race_story_ids already reached the same
-# conclusion the long way round for race beats ("ALWAYS has the higher
-# story_id"); this is the same rule read straight off master instead.
-#
-# Idempotent by construction: the lookup is on `story_id` only, so handing it
-# an id that is already short leaves it alone.
+# STORY IDS ON THE WIRE.
+# Both Global and JP send the full master story_id.
 @master_data.context_cache(maxsize=8192)
 def wire_story_id(story_id) -> int:
-    """The id the client is served for this story -- its short id when it has
-    one, otherwise the id itself."""
+    """Return the full master story id, translating short ids when needed."""
     try:
         sid = int(story_id or 0)
     except (TypeError, ValueError):
         return story_id
     if sid <= 0:
         return story_id
+    if master_data.query_one(
+            "SELECT 1 FROM single_mode_story_data WHERE story_id=?", (sid,)):
+        return sid
     row = master_data.query_one(
-        "SELECT short_story_id FROM single_mode_story_data WHERE story_id=?", (sid,))
-    short = (row["short_story_id"] if row else 0) or 0
-    return short or sid
+        "SELECT story_id FROM single_mode_story_data WHERE short_story_id=? ORDER BY id",
+        (sid,))
+    if row:
+        return int(row["story_id"])
+    return sid
+
+
+def normalize_response_story_ids(resp: dict) -> None:
+    """Send full story ids in every event array of a Global response."""
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "unchecked_event_array" and isinstance(value, list):
+                    for event in value:
+                        if isinstance(event, dict) and event.get("story_id"):
+                            event["story_id"] = wire_story_id(event["story_id"])
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(resp.get("data"))
 
 
 # THE PER-TRAINEE EVENT BAND (the 11xxx/12xxx ids) -- STILL UNSOLVED, and the
@@ -1133,9 +1140,8 @@ def career_event_entry(event: dict, event_id: int, story_id: int,
     choice_array has one slot per choice -- see choice_array() for when a story
     legitimately has none."""
     return {
-        # wire_story_id, not the id the caller tracks it by: bookkeeping keys
-        # (fired-event sets, dedupe keys, master lookups) stay on the reference
-        # id, and only the wire carries the short one. See wire_story_id.
+        # Bookkeeping keys (fired-event sets, dedupe keys, master lookups) stay
+        # on the reference id. See wire_story_id for the Global wire format.
         "event_id": event_id, "chara_id": chara_id,
         "story_id": wire_story_id(story_id),
         "play_timing": play_timing,

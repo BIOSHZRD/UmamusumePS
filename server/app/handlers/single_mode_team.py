@@ -1226,7 +1226,40 @@ def sync_chara_info(viewer_id, endpoint: str, response: dict) -> dict:
             _trim_opponent_envelope(endpoint, response)
         except Exception:
             log.exception("opponent envelope trim failed; serving untrimmed")
+    _disable_career_short_cut(viewer_id, endpoint, response)
     return response
+
+
+def _disable_career_short_cut(viewer_id, endpoint: str, response: dict) -> None:
+    """Keep career quick mode disabled in persisted state and every wire copy."""
+    if not isinstance(endpoint, str) or not endpoint.startswith(_career_prefixes()):
+        return
+
+    full_state = state_store.get_state(viewer_id) or {}
+    changed = full_state.get(SHORT_CUT_KEY) != 0
+    full_state[SHORT_CUT_KEY] = 0
+
+    career = full_state.get(STATE_KEY)
+    career_data = career.get("data") if isinstance(career, dict) else None
+    chara_info = career_data.get("chara_info") if isinstance(career_data, dict) else None
+    if isinstance(chara_info, dict) and chara_info.get("short_cut_state") != 0:
+        chara_info["short_cut_state"] = 0
+        changed = True
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "chara_info" and isinstance(value, dict):
+                    value["short_cut_state"] = 0
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk((response or {}).get("data"))
+    if changed:
+        state_store.save_state(viewer_id, full_state)
 
 
 def _carry_locked_npc_rows(response: dict) -> None:
@@ -10374,9 +10407,8 @@ _SHARED_BEAT_EVENT_IDS = {
     # Black's camp beats are 409/410, Special Week's and El Condor Pasa's are
     # 406/407, Gold Ship's are 409 and 420. Keying on 409 would have given
     # Special Week's "Before the Kisaragi Sho" the camp id. This table is keyed
-    # by the REFERENCE suffix, which is what every producer here computes, and
-    # event_engine.wire_story_id turns it into the trainee's own short id on
-    # the way out. Same reason 100 sits beside 400 above.
+    # by the REFERENCE suffix, which is what every producer here computes.
+    # event_engine.wire_story_id preserves the full master id on the wire.
     103: 3003,    # Summer Camp (Year 2) Begins!  (short id 4xx, per trainee)
     105: 3005,    # Summer Camp (Year 3) Begins!  (short id 4xx, per trainee)
     600: 3016,    # Ready for a Challenge
@@ -15189,17 +15221,17 @@ def handle_factor_relottery_end(payload: dict) -> dict:
 
 def handle_change_short_cut(payload: dict) -> dict:
     """single_mode/change_short_cut {short_cut_state, current_turn} -- the
-    career skip / fast-forward setting (how much of each event the client plays
-    out). Aliased onto every scenario prefix by _install_scenario_routes.
+    career quick-mode setting. Quick mode is permanently disabled, so ignore
+    the requested value and return the state with short_cut_state=0. Aliased
+    onto every scenario prefix by _install_scenario_routes.
 
     It is a preference, but not a client-only one, so it cannot stay on the
     no-op fallback: SingleModeChangeShortCutResponse.CommonResponse declares
     {chara_info, unchecked_event_array, <scenario>_data_set}, and NOOP_SUCCESS's
-    empty `data` deserializes all three to null in the middle of a live career
-    -- the same shape behind present/index's blank tab and the familiar
-    null-data_set softlocks. So: persist the flag, hand back the standard
-    training-state envelope, and let the outbound sync_chara_info attach
-    whichever data_set the running scenario owns.
+    empty `data` deserializes all three to null in the middle of a live career.
+    Return the standard training-state envelope and let the outbound sync
+    attach the running scenario's data_set; the shared career postprocessor
+    enforces the disabled value on every copy.
 
     Never captured (no logged session has posted it), so the response shape is
     dump.cs's declaration rather than a wire fact -- but a well-formed career
@@ -15210,8 +15242,9 @@ def handle_change_short_cut(payload: dict) -> dict:
     if not isinstance(career, dict):
         return _no_career_refusal(viewer_id, "single_mode/change_short_cut", full_state)
 
-    full_state[SHORT_CUT_KEY] = int(payload.get("short_cut_state") or 0)
+    full_state[SHORT_CUT_KEY] = 0
     chara_info = career["data"]["chara_info"]
+    chara_info["short_cut_state"] = 0
     response = _load_ura_race_seed("train_check_event")
     data = response["data"]
     data["chara_info"] = copy.deepcopy(chara_info)

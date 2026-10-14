@@ -163,12 +163,9 @@ SCENARIO_SCHEDULE: dict[int, list[int]] = {
 
 # character event_id -> story suffix (the last 3 digits of 50<chara><nnn>).
 # Confirmed from captures; expand as needed. 3000 = the career intro cutscene.
-# 3000 is keyed by its REFERENCE story (100), not its short id (400):
-# _wire_story_id turns 50<chara>100 into the trainee's short id when it has
-# one. Newer trainees have NO short id (JP master: 1073, 1079, 1110+ ... carry
-# short_story_id 0) and the real JP server serves them 50<chara>100 -- a
-# hardcoded 400 named a story that doesn't exist, and the client dropped to
-# title the moment the intro played (JP ramen/start capture, chara 1131).
+# 3000 is keyed by its REFERENCE story (100), not its short id (400). The
+# wire helper normalizes short ids to their full master story id; newer
+# trainees with no short id (JP master: 1073, 1079, 1110+ ...) stay unchanged.
 _CHARA_EVENT_STORY_SUFFIX = {3000: 100, 4000: 900}
 
 

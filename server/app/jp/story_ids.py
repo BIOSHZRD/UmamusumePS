@@ -1,10 +1,11 @@
 """JP puts the FULL story id on the wire, never the short one.
 
-The shared pipeline serves single_mode_story_data.short_story_id when a row has
-one (event_engine.wire_story_id): that is what the Global server sends. The JP
-server does not. Across every JP capture (umacap DYI / Beyond Dreams / Venus /
-URA and the headless DYI careers), all 1,261 served stories that have a short
-id went out under their `story_id`; not one short id was served.
+Some shared and scenario producers store `short_story_id` directly, so this
+rewrites the reply's events on the way out. Global performs the same
+canonicalization at its transport boundary. Across every JP capture (umacap
+DYI / Beyond Dreams / Venus / URA and the headless DYI careers), all 1,261
+served stories that have a short id went out under their `story_id`; not one
+short id was served.
 
 This rewrites the reply's events on the way out, so every producer (the
 engine, the hardcoded URA and goal-scene short ids) gets the JP form. State
@@ -44,14 +45,16 @@ def _fix(events) -> None:
 
 
 def apply(resp: dict) -> None:
-    """Every unchecked_event_array in the reply (top level and the
-    *_load_common / *_common blocks) to full story ids."""
-    def walk(node, depth=0):
-        if depth > 3 or not isinstance(node, dict):
-            return
-        for key, val in node.items():
-            if key == "unchecked_event_array" and isinstance(val, list):
-                _fix(val)
-            elif isinstance(val, dict):
-                walk(val, depth + 1)
+    """Rewrite every unchecked_event_array in the reply to full story ids."""
+    def walk(node):
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key == "unchecked_event_array" and isinstance(val, list):
+                    _fix(val)
+                else:
+                    walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
     walk(resp.get("data"))

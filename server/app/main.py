@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request, Response
 
 from . import crypto
 from . import dispatch as pipeline
+from . import event_engine
 from . import region
 from .admin_lifecycle import lifespan
 
@@ -53,6 +54,7 @@ async def dispatch(endpoint_path: str, request: Request):
     decoded = crypto.decode_request(raw, dict(request.headers))
     with custom_support.request_context(dict(request.headers), decoded.payload):
         patched = custom_support.project(pipeline.handle_decoded(endpoint_path, decoded.payload, decoded.sid or None))
+    event_engine.normalize_response_story_ids(patched)
     body = crypto.encode_response(patched, decoded.udid_raw)
     # VERIFIED 2026-08-11 against a live real-server capture
     # (tools/capture_proxy.py --upstream real): the real server's
